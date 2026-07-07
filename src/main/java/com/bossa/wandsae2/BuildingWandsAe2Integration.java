@@ -11,8 +11,10 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.neoforged.bus.api.IEventBus;
+import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 
 @Mod(BuildingWandsAe2Integration.MODID)
@@ -33,6 +35,7 @@ public class BuildingWandsAe2Integration {
     public BuildingWandsAe2Integration(IEventBus modEventBus) {
         modEventBus.addListener(this::commonSetup);
         modEventBus.addListener(this::registerPayloadHandlers);
+        NeoForge.EVENT_BUS.addListener(this::serverTick);
     }
 
     private void registerPayloadHandlers(RegisterPayloadHandlersEvent event) {
@@ -55,5 +58,9 @@ public class BuildingWandsAe2Integration {
             }
             LOGGER.info("Registered Building Wands as AE2 grid-linkable items");
         });
+    }
+
+    private void serverTick(ServerTickEvent.Post event) {
+        Ae2WandBridge.tickPendingAutoPlacements(event.getServer());
     }
 }

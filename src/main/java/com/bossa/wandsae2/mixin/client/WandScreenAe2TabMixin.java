@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.nicguzzo.wands.client.gui.Btn;
 import net.nicguzzo.wands.client.gui.CycleToggle;
+import net.nicguzzo.wands.client.gui.Divider;
 import net.nicguzzo.wands.client.gui.Section;
 import net.nicguzzo.wands.client.gui.Spinner;
 import net.nicguzzo.wands.client.gui.Tabs;
@@ -89,6 +90,7 @@ public abstract class WandScreenAe2TabMixin {
         autocraftToggle.withTooltip(Component.literal("Missing blocks"),
                 Component.literal("Ask before AE2 autocrafts missing blocks, or start the craft automatically."));
         wandsae2$ae2Section.add(autocraftToggle);
+        wandsae2$ae2Section.add(new Divider(modeOptionsSection.width));
 
         CycleToggle<Boolean> craftExcessToggle = CycleToggle.ofBoolean(
                 Component.literal("Craft Excess"),
@@ -110,7 +112,7 @@ public abstract class WandScreenAe2TabMixin {
                 Ae2WandSettings.getCraftExcessAmount(wandsae2$getHeldWand()),
                 Ae2WandSettings.MIN_CRAFT_EXCESS_AMOUNT,
                 Ae2WandSettings.MAX_CRAFT_EXCESS_AMOUNT,
-                Component.literal("Excess Amount"));
+                Component.literal("Amount"));
         craftExcessAmount.width = modeOptionsSection.width;
         craftExcessAmount.incrementValue = 1;
         craftExcessAmount.shiftIncrementValue = 10;
@@ -123,7 +125,7 @@ public abstract class WandScreenAe2TabMixin {
                     Ae2WandSettings.isCraftExcess(stack),
                     value));
         });
-        craftExcessAmount.withTooltip(Component.literal("Excess Amount"),
+        craftExcessAmount.withTooltip(Component.literal("Amount"),
                 Component.literal("Extra blocks to craft when Craft Excess is ON."));
         wandsae2$ae2Section.add(craftExcessAmount);
 

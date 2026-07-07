@@ -1,8 +1,12 @@
 package com.bossa.wandsae2;
 
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Future;
 
 import appeng.api.config.Actionable;
@@ -25,18 +29,25 @@ import appeng.menu.locator.MenuLocators;
 import appeng.menu.me.crafting.CraftAmountMenu;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.phys.Vec3;
+import net.nicguzzo.wands.items.WandItem;
 import net.nicguzzo.wands.wand.BlockAccounting;
 import net.nicguzzo.wands.wand.Wand;
 
 public final class Ae2WandBridge {
     private static final Map<String, Long> LAST_CRAFT_REQUEST = new ConcurrentHashMap<>();
+    private static final List<PendingAutoPlacement> PENDING_AUTO_PLACEMENTS = new CopyOnWriteArrayList<>();
     private static final long CRAFT_REQUEST_COOLDOWN_TICKS = 40;
+    private static final long AUTO_PLACE_TIMEOUT_TICKS = 20 * 60;
+    private static final long AUTO_PLACE_POLL_INTERVAL_TICKS = 5;
 
     private Ae2WandBridge() {
     }
@@ -103,7 +114,7 @@ public final class Ae2WandBridge {
                 continue;
             }
 
-            openCraftingAmountAfterWandAction(context.player, wand, key, getCraftAmount(wand, missing));
+            openCraftingAmountAfterWandAction(context.player, wand, key, missing, getCraftAmount(wand, missing));
             return;
         }
     }
@@ -136,7 +147,8 @@ public final class Ae2WandBridge {
         return hasMissing;
     }
 
-    private static void openCraftingAmountAfterWandAction(ServerPlayer player, Wand wand, AEItemKey key, int missing) {
+    private static void openCraftingAmountAfterWandAction(ServerPlayer player, Wand wand, AEItemKey key,
+            int requiredAmount, int craftAmount) {
         player.getServer().execute(() -> {
             if (player.hasDisconnected()) {
                 return;
@@ -146,7 +158,7 @@ public final class Ae2WandBridge {
             if (locator == null) {
                 BuildingWandsAe2Integration.LOGGER.warn(
                         "Could not find wand stack in player inventory to open AE2 craft confirm menu for {} x {}",
-                        missing, key);
+                        craftAmount, key);
                 return;
             }
 
@@ -154,20 +166,22 @@ public final class Ae2WandBridge {
             if (host == null || host.getActionableNode() == null) {
                 BuildingWandsAe2Integration.LOGGER.warn(
                         "Could not resolve linked wand AE2 host to open AE2 craft amount menu for {} x {}",
-                        missing, key);
+                        craftAmount, key);
                 return;
             }
 
             if (Ae2WandSettings.isAutoCraftWithoutAsking(resolveWandStack(player, wand))) {
-                submitCraftingJobSilently(player, host, key, missing);
+                submitCraftingJobSilently(player, host, key, requiredAmount, craftAmount,
+                        PendingAutoPlacement.create(player, wand, key, requiredAmount));
             } else {
                 player.displayClientMessage(Component.literal("Crafting missing blocks"), true);
-                CraftAmountMenu.open(player, locator, key, missing);
+                CraftAmountMenu.open(player, locator, key, craftAmount);
             }
         });
     }
 
-    private static void submitCraftingJobSilently(ServerPlayer player, WandItemMenuHost host, AEItemKey key, int missing) {
+    private static void submitCraftingJobSilently(ServerPlayer player, WandItemMenuHost host, AEItemKey key,
+            int requiredAmount, int craftAmount, PendingAutoPlacement pendingPlacement) {
         IGridNode node = host.getActionableNode();
         if (node == null || node.getGrid() == null) {
             return;
@@ -191,11 +205,12 @@ public final class Ae2WandBridge {
                 player.level(),
                 requester,
                 key,
-                missing,
+                craftAmount,
                 CalculationStrategy.REPORT_MISSING_ITEMS);
 
-        CompletableFuture.supplyAsync(() -> awaitCraftingPlan(future, key, missing))
-                .thenAccept(plan -> player.getServer().execute(() -> submitCraftingPlan(player, crafting, source, plan)));
+        CompletableFuture.supplyAsync(() -> awaitCraftingPlan(future, key, craftAmount))
+                .thenAccept(plan -> player.getServer().execute(
+                        () -> submitCraftingPlan(player, crafting, source, plan, pendingPlacement, requiredAmount)));
     }
 
     private static ICraftingPlan awaitCraftingPlan(Future<ICraftingPlan> future, AEKey key, int missing) {
@@ -208,7 +223,7 @@ public final class Ae2WandBridge {
     }
 
     private static void submitCraftingPlan(ServerPlayer player, ICraftingService crafting, IActionSource source,
-            ICraftingPlan plan) {
+            ICraftingPlan plan, PendingAutoPlacement pendingPlacement, int requiredAmount) {
         if (player.hasDisconnected() || plan == null) {
             return;
         }
@@ -221,6 +236,9 @@ public final class Ae2WandBridge {
         ICraftingSubmitResult result = crafting.submitJob(plan, null, null, true, source);
         if (result.successful()) {
             player.displayClientMessage(Component.literal("Crafting missing blocks"), true);
+            if (pendingPlacement != null && requiredAmount > 0) {
+                PENDING_AUTO_PLACEMENTS.add(pendingPlacement);
+            }
         } else {
             BuildingWandsAe2Integration.LOGGER.warn(
                     "Could not submit silent AE2 craft for {} x {}: {} ({})",
@@ -228,6 +246,46 @@ public final class Ae2WandBridge {
                     plan.finalOutput().what(),
                     result.errorCode(),
                     result.errorDetail());
+        }
+    }
+
+    public static void tickPendingAutoPlacements(MinecraftServer server) {
+        if (PENDING_AUTO_PLACEMENTS.isEmpty()) {
+            return;
+        }
+
+        long now = server.overworld().getGameTime();
+        Iterator<PendingAutoPlacement> iterator = PENDING_AUTO_PLACEMENTS.iterator();
+        while (iterator.hasNext()) {
+            PendingAutoPlacement pending = iterator.next();
+            if (pending.isExpired(now)) {
+                PENDING_AUTO_PLACEMENTS.remove(pending);
+                continue;
+            }
+            if (now < pending.nextCheckTick()) {
+                continue;
+            }
+            pending.setNextCheckTick(now + AUTO_PLACE_POLL_INTERVAL_TICKS);
+
+            ServerPlayer player = server.getPlayerList().getPlayer(pending.playerId());
+            if (player == null || player.hasDisconnected()) {
+                PENDING_AUTO_PLACEMENTS.remove(pending);
+                continue;
+            }
+
+            GridContext context = getGridContext(pending.wand());
+            if (context == null) {
+                PENDING_AUTO_PLACEMENTS.remove(pending);
+                continue;
+            }
+
+            long available = context.grid().getStorageService().getCachedInventory().get(pending.key());
+            if (available < pending.requiredAmount()) {
+                continue;
+            }
+
+            PENDING_AUTO_PLACEMENTS.remove(pending);
+            pending.run(player);
         }
     }
 
@@ -304,5 +362,74 @@ public final class Ae2WandBridge {
     }
 
     private record GridContext(ServerPlayer player, IGrid grid, GlobalPos linkedPos) {
+    }
+
+    private static final class PendingAutoPlacement {
+        private final UUID playerId;
+        private final Wand wand;
+        private final AEItemKey key;
+        private final int requiredAmount;
+        private final long expireTick;
+        private long nextCheckTick;
+        private final BlockState blockState;
+        private final net.minecraft.core.BlockPos pos;
+        private final net.minecraft.core.Direction side;
+        private final Vec3 hit;
+        private final ItemStack wandStack;
+        private final WandItem wandItem;
+
+        private PendingAutoPlacement(ServerPlayer player, Wand wand, AEItemKey key, int requiredAmount) {
+            this.playerId = player.getUUID();
+            this.wand = wand;
+            this.key = key;
+            this.requiredAmount = requiredAmount;
+            this.expireTick = player.level().getGameTime() + AUTO_PLACE_TIMEOUT_TICKS;
+            this.nextCheckTick = player.level().getGameTime() + AUTO_PLACE_POLL_INTERVAL_TICKS;
+            this.blockState = wand.block_state;
+            this.pos = wand.pos == null ? null : wand.pos.immutable();
+            this.side = wand.getSide();
+            this.hit = wand.hit;
+            this.wandStack = wand.wand_stack;
+            this.wandItem = wand.wand_stack != null && wand.wand_stack.getItem() instanceof WandItem item ? item : null;
+        }
+
+        static PendingAutoPlacement create(ServerPlayer player, Wand wand, AEItemKey key, int requiredAmount) {
+            return new PendingAutoPlacement(player, wand, key, requiredAmount);
+        }
+
+        boolean isExpired(long now) {
+            return now > expireTick;
+        }
+
+        long nextCheckTick() {
+            return nextCheckTick;
+        }
+
+        void setNextCheckTick(long nextCheckTick) {
+            this.nextCheckTick = nextCheckTick;
+        }
+
+        UUID playerId() {
+            return playerId;
+        }
+
+        Wand wand() {
+            return wand;
+        }
+
+        AEItemKey key() {
+            return key;
+        }
+
+        int requiredAmount() {
+            return requiredAmount;
+        }
+
+        void run(ServerPlayer player) {
+            if (wandItem == null || wandStack == null || wandStack.isEmpty() || pos == null || side == null) {
+                return;
+            }
+            wand.do_or_preview(player, player.level(), blockState, pos, side, hit, wandStack, wandItem, false);
+        }
     }
 }
