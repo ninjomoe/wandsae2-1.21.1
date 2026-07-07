@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "package": "com.bossa.wandsae2.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "CraftConfirmMenuMixin",
+    "InventoryManagerMixin",
+    "WandItemMenuMixin"
+  ],
+  "client": [
+    "client.WandScreenAe2TabMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
