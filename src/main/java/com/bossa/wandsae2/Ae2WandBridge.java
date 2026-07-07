@@ -103,9 +103,17 @@ public final class Ae2WandBridge {
                 continue;
             }
 
-            openCraftingAmountAfterWandAction(context.player, wand, key, missing);
+            openCraftingAmountAfterWandAction(context.player, wand, key, getCraftAmount(wand, missing));
             return;
         }
+    }
+
+    private static int getCraftAmount(Wand wand, int missing) {
+        ItemStack wandStack = wand.wand_stack;
+        if (Ae2WandSettings.isCraftExcess(wandStack)) {
+            return saturatedAdd(missing, Ae2WandSettings.getCraftExcessAmount(wandStack));
+        }
+        return missing;
     }
 
     public static boolean canCraftAllMissingBlocks(Wand wand) {

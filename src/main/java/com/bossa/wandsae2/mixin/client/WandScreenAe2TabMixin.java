@@ -4,6 +4,7 @@ import java.util.Vector;
 
 import com.bossa.wandsae2.Ae2WandSettings;
 import com.bossa.wandsae2.network.SetAutoCraftModePacket;
+import com.bossa.wandsae2.network.SetCraftExcessPacket;
 
 import appeng.api.ids.AEComponents;
 import net.minecraft.client.Minecraft;
@@ -14,6 +15,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.nicguzzo.wands.client.gui.Btn;
 import net.nicguzzo.wands.client.gui.CycleToggle;
 import net.nicguzzo.wands.client.gui.Section;
+import net.nicguzzo.wands.client.gui.Spinner;
 import net.nicguzzo.wands.client.gui.Tabs;
 import net.nicguzzo.wands.client.gui.Wdgt;
 import net.nicguzzo.wands.client.screens.WandScreen;
@@ -87,6 +89,44 @@ public abstract class WandScreenAe2TabMixin {
         autocraftToggle.withTooltip(Component.literal("Missing blocks"),
                 Component.literal("Ask before AE2 autocrafts missing blocks, or start the craft automatically."));
         wandsae2$ae2Section.add(autocraftToggle);
+
+        CycleToggle<Boolean> craftExcessToggle = CycleToggle.ofBoolean(
+                Component.literal("Craft Excess"),
+                () -> Ae2WandSettings.isCraftExcess(wandsae2$getHeldWand()),
+                value -> {
+                    ItemStack stack = wandsae2$getHeldWand();
+                    Ae2WandSettings.setCraftExcess(stack, value);
+                    PacketDistributor.sendToServer(new SetCraftExcessPacket(value,
+                            Ae2WandSettings.getCraftExcessAmount(stack)));
+                },
+                "ON",
+                "OFF");
+        craftExcessToggle.width = modeOptionsSection.width;
+        craftExcessToggle.withTooltip(Component.literal("Craft Excess"),
+                Component.literal("Craft extra blocks in addition to the missing amount."));
+        wandsae2$ae2Section.add(craftExcessToggle);
+
+        Spinner craftExcessAmount = new Spinner(
+                Ae2WandSettings.getCraftExcessAmount(wandsae2$getHeldWand()),
+                Ae2WandSettings.MIN_CRAFT_EXCESS_AMOUNT,
+                Ae2WandSettings.MAX_CRAFT_EXCESS_AMOUNT,
+                Component.literal("Excess Amount"));
+        craftExcessAmount.width = modeOptionsSection.width;
+        craftExcessAmount.incrementValue = 1;
+        craftExcessAmount.shiftIncrementValue = 10;
+        craftExcessAmount.ctrlIncrementValue = 100;
+        craftExcessAmount.shiftCtrlIncrementValue = 250;
+        craftExcessAmount.withOnChange(value -> {
+            ItemStack stack = wandsae2$getHeldWand();
+            Ae2WandSettings.setCraftExcessAmount(stack, value);
+            PacketDistributor.sendToServer(new SetCraftExcessPacket(
+                    Ae2WandSettings.isCraftExcess(stack),
+                    value));
+        });
+        craftExcessAmount.withTooltip(Component.literal("Excess Amount"),
+                Component.literal("Extra blocks to craft when Craft Excess is ON."));
+        wandsae2$ae2Section.add(craftExcessAmount);
+
         wandsae2$ae2Section.layout();
         wandsae2$ae2Section.recalculateBounds();
         wandsae2$ae2Section.visible = false;
