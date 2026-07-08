@@ -33,7 +33,9 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -41,9 +43,11 @@ import net.minecraft.world.phys.Vec3;
 import net.nicguzzo.wands.items.WandItem;
 import net.nicguzzo.wands.wand.BlockAccounting;
 import net.nicguzzo.wands.wand.Wand;
+import net.nicguzzo.wands.wand.WandProps;
 
 public final class Ae2WandBridge {
     private static final Map<String, Long> LAST_CRAFT_REQUEST = new ConcurrentHashMap<>();
+    private static final Map<UUID, Long> AUTO_BUSY_UNTIL = new ConcurrentHashMap<>();
     private static final List<PendingAutoPlacement> PENDING_AUTO_PLACEMENTS = new CopyOnWriteArrayList<>();
     private static final long CRAFT_REQUEST_COOLDOWN_TICKS = 40;
     private static final long AUTO_PLACE_TIMEOUT_TICKS = 20 * 60;
@@ -53,13 +57,19 @@ public final class Ae2WandBridge {
     }
 
     public static void addAvailableBlocks(Wand wand) {
+        sanitizeBlockAccounting(wand);
+
         GridContext context = getGridContext(wand);
         if (context == null) {
             return;
         }
 
         for (Map.Entry<Item, BlockAccounting> entry : wand.block_accounting.entrySet()) {
-            AEItemKey key = AEItemKey.of(entry.getKey());
+            AEItemKey key = toItemKey(entry.getKey());
+            if (key == null) {
+                continue;
+            }
+
             long amount = context.grid.getStorageService().getCachedInventory().get(key);
             if (amount > 0) {
                 entry.getValue().in_player = saturatedAdd(entry.getValue().in_player, amount);
@@ -68,6 +78,8 @@ public final class Ae2WandBridge {
     }
 
     public static void extractPlacedBlocks(Wand wand) {
+        sanitizeBlockAccounting(wand);
+
         GridContext context = getGridContext(wand);
         if (context == null) {
             return;
@@ -80,7 +92,11 @@ public final class Ae2WandBridge {
                 continue;
             }
 
-            AEItemKey key = AEItemKey.of(entry.getKey());
+            AEItemKey key = toItemKey(entry.getKey());
+            if (key == null) {
+                continue;
+            }
+
             long extracted = StorageHelper.poweredExtraction(
                     context.grid.getEnergyService(),
                     context.grid.getStorageService().getInventory(),
@@ -93,6 +109,11 @@ public final class Ae2WandBridge {
     }
 
     public static void requestMissingCrafts(Wand wand) {
+        sanitizeBlockAccounting(wand);
+        if (!shouldAutocraftMissingBlocks(wand)) {
+            return;
+        }
+
         GridContext context = getGridContext(wand);
         if (context == null) {
             return;
@@ -106,7 +127,11 @@ public final class Ae2WandBridge {
                 continue;
             }
 
-            AEItemKey key = AEItemKey.of(entry.getKey());
+            AEItemKey key = toItemKey(entry.getKey());
+            if (key == null) {
+                continue;
+            }
+
             if (!crafting.isCraftable(key)) {
                 continue;
             }
@@ -128,6 +153,11 @@ public final class Ae2WandBridge {
     }
 
     public static boolean canCraftAllMissingBlocks(Wand wand) {
+        sanitizeBlockAccounting(wand);
+        if (!shouldAutocraftMissingBlocks(wand)) {
+            return false;
+        }
+
         GridContext context = getGridContext(wand);
         if (context == null) {
             return false;
@@ -138,13 +168,37 @@ public final class Ae2WandBridge {
         for (Map.Entry<Item, BlockAccounting> entry : wand.block_accounting.entrySet()) {
             BlockAccounting accounting = entry.getValue();
             if (accounting.needed > accounting.in_player) {
+                AEItemKey key = toItemKey(entry.getKey());
+                if (key == null) {
+                    return false;
+                }
+
                 hasMissing = true;
-                if (!crafting.isCraftable(AEItemKey.of(entry.getKey()))) {
+                if (!crafting.isCraftable(key)) {
                     return false;
                 }
             }
         }
         return hasMissing;
+    }
+
+    public static boolean isAutoPlacementRunning(Player player) {
+        if (player == null) {
+            return false;
+        }
+
+        UUID playerId = player.getUUID();
+        Long busyUntil = AUTO_BUSY_UNTIL.get(playerId);
+        if (busyUntil != null && player.level().getGameTime() <= busyUntil) {
+            return true;
+        }
+
+        for (PendingAutoPlacement pending : PENDING_AUTO_PLACEMENTS) {
+            if (pending.playerId().equals(playerId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void openCraftingAmountAfterWandAction(ServerPlayer player, Wand wand, AEItemKey key,
@@ -186,6 +240,7 @@ public final class Ae2WandBridge {
         if (node == null || node.getGrid() == null) {
             return;
         }
+        AUTO_BUSY_UNTIL.put(player.getUUID(), player.level().getGameTime() + AUTO_PLACE_TIMEOUT_TICKS);
 
         ICraftingService crafting = node.getGrid().getCraftingService();
         IActionSource source = new PlayerSource(player, host);
@@ -225,10 +280,12 @@ public final class Ae2WandBridge {
     private static void submitCraftingPlan(ServerPlayer player, ICraftingService crafting, IActionSource source,
             ICraftingPlan plan, PendingAutoPlacement pendingPlacement, int requiredAmount) {
         if (player.hasDisconnected() || plan == null) {
+            AUTO_BUSY_UNTIL.remove(player.getUUID());
             return;
         }
 
         if (plan.simulation() || !plan.missingItems().isEmpty()) {
+            AUTO_BUSY_UNTIL.remove(player.getUUID());
             player.displayClientMessage(Component.literal("Auto-Crafting failed: Missing Ingredients"), true);
             return;
         }
@@ -237,9 +294,11 @@ public final class Ae2WandBridge {
         if (result.successful()) {
             player.displayClientMessage(Component.literal("Crafting missing blocks"), true);
             if (pendingPlacement != null && requiredAmount > 0) {
+                removePendingAutoPlacements(player.getUUID());
                 PENDING_AUTO_PLACEMENTS.add(pendingPlacement);
             }
         } else {
+            AUTO_BUSY_UNTIL.remove(player.getUUID());
             BuildingWandsAe2Integration.LOGGER.warn(
                     "Could not submit silent AE2 craft for {} x {}: {} ({})",
                     plan.finalOutput().amount(),
@@ -251,15 +310,18 @@ public final class Ae2WandBridge {
 
     public static void tickPendingAutoPlacements(MinecraftServer server) {
         if (PENDING_AUTO_PLACEMENTS.isEmpty()) {
+            AUTO_BUSY_UNTIL.entrySet().removeIf(entry -> entry.getValue() < server.overworld().getGameTime());
             return;
         }
 
         long now = server.overworld().getGameTime();
+        AUTO_BUSY_UNTIL.entrySet().removeIf(entry -> entry.getValue() < now);
         Iterator<PendingAutoPlacement> iterator = PENDING_AUTO_PLACEMENTS.iterator();
         while (iterator.hasNext()) {
             PendingAutoPlacement pending = iterator.next();
             if (pending.isExpired(now)) {
                 PENDING_AUTO_PLACEMENTS.remove(pending);
+                AUTO_BUSY_UNTIL.remove(pending.playerId());
                 continue;
             }
             if (now < pending.nextCheckTick()) {
@@ -270,12 +332,14 @@ public final class Ae2WandBridge {
             ServerPlayer player = server.getPlayerList().getPlayer(pending.playerId());
             if (player == null || player.hasDisconnected()) {
                 PENDING_AUTO_PLACEMENTS.remove(pending);
+                AUTO_BUSY_UNTIL.remove(pending.playerId());
                 continue;
             }
 
             GridContext context = getGridContext(pending.wand());
             if (context == null) {
                 PENDING_AUTO_PLACEMENTS.remove(pending);
+                AUTO_BUSY_UNTIL.remove(pending.playerId());
                 continue;
             }
 
@@ -286,6 +350,7 @@ public final class Ae2WandBridge {
 
             PENDING_AUTO_PLACEMENTS.remove(pending);
             pending.run(player);
+            AUTO_BUSY_UNTIL.remove(pending.playerId());
         }
     }
 
@@ -321,6 +386,40 @@ public final class Ae2WandBridge {
         }
         LAST_CRAFT_REQUEST.put(requestKey, now);
         return true;
+    }
+
+    private static AEItemKey toItemKey(Item item) {
+        if (item == null || item == Items.AIR) {
+            return null;
+        }
+        return AEItemKey.of(item);
+    }
+
+    private static boolean shouldAutocraftMissingBlocks(Wand wand) {
+        if (wand == null || wand.destroy || wand.use) {
+            return false;
+        }
+
+        ItemStack wandStack = wand.wand_stack;
+        if (wandStack == null || wandStack.isEmpty()) {
+            return false;
+        }
+
+        WandProps.Action action = WandProps.getAction(wandStack);
+        return action == WandProps.Action.PLACE || action == WandProps.Action.REPLACE;
+    }
+
+    private static void sanitizeBlockAccounting(Wand wand) {
+        if (wand == null || wand.block_accounting == null) {
+            return;
+        }
+
+        wand.block_accounting.entrySet().removeIf(entry -> entry.getKey() == null || entry.getKey() == Items.AIR
+                || entry.getValue() == null);
+    }
+
+    private static void removePendingAutoPlacements(UUID playerId) {
+        PENDING_AUTO_PLACEMENTS.removeIf(pending -> pending.playerId().equals(playerId));
     }
 
     private static GridContext getGridContext(Wand wand) {
@@ -429,6 +528,7 @@ public final class Ae2WandBridge {
             if (wandItem == null || wandStack == null || wandStack.isEmpty() || pos == null || side == null) {
                 return;
             }
+            sanitizeBlockAccounting(wand);
             wand.do_or_preview(player, player.level(), blockState, pos, side, hit, wandStack, wandItem, false);
         }
     }

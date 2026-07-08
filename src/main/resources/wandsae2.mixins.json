@@ -5,6 +5,7 @@
   "mixins": [
     "CraftConfirmMenuMixin",
     "InventoryManagerMixin",
+    "NetworkingMixin",
     "WandItemMenuMixin"
   ],
   "client": [
