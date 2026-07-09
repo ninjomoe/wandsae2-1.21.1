@@ -62,5 +62,6 @@ public class BuildingWandsAe2Integration {
 
     private void serverTick(ServerTickEvent.Post event) {
         Ae2WandBridge.tickPendingAutoPlacements(event.getServer());
+        CopycatPasteSupport.tickPendingRestores();
     }
 }
