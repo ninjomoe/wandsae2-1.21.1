@@ -9,6 +9,7 @@ public final class Ae2WandSettings {
     private static final String AUTO_CRAFT_WITHOUT_ASKING = "wandsae2_auto_craft_without_asking";
     private static final String CRAFT_EXCESS = "wandsae2_craft_excess";
     private static final String CRAFT_EXCESS_AMOUNT = "wandsae2_craft_excess_amount";
+    private static final String REPLACE_AIR_AND_WATER = "wandsae2_replace_air_and_water";
     public static final int MIN_CRAFT_EXCESS_AMOUNT = 1;
     public static final int MAX_CRAFT_EXCESS_AMOUNT = 1000;
 
@@ -68,6 +69,23 @@ public final class Ae2WandSettings {
         }
 
         updateTag(stack, tag -> tag.putInt(CRAFT_EXCESS_AMOUNT, clampCraftExcessAmount(amount)));
+    }
+
+    public static boolean isReplaceAirAndWater(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return false;
+        }
+
+        CustomData customData = stack.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY);
+        return customData.copyTag().getBoolean(REPLACE_AIR_AND_WATER);
+    }
+
+    public static void setReplaceAirAndWater(ItemStack stack, boolean value) {
+        if (stack == null || stack.isEmpty()) {
+            return;
+        }
+
+        updateTag(stack, tag -> tag.putBoolean(REPLACE_AIR_AND_WATER, value));
     }
 
     public static int clampCraftExcessAmount(int amount) {

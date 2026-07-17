@@ -21,6 +21,7 @@ import appeng.api.networking.crafting.ICraftingSimulationRequester;
 import appeng.api.networking.crafting.ICraftingSubmitResult;
 import appeng.api.networking.security.IActionSource;
 import appeng.api.stacks.AEKey;
+import appeng.api.stacks.AEFluidKey;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.storage.StorageHelper;
 import appeng.me.helpers.PlayerSource;
@@ -39,6 +40,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.Vec3;
 import net.nicguzzo.wands.items.WandItem;
 import net.nicguzzo.wands.wand.BlockAccounting;
@@ -47,9 +49,11 @@ import net.nicguzzo.wands.wand.WandProps;
 
 public final class Ae2WandBridge {
     private static final Map<String, Long> LAST_CRAFT_REQUEST = new ConcurrentHashMap<>();
+    private static final Map<UUID, Long> LAST_WATER_WARNING = new ConcurrentHashMap<>();
     private static final Map<UUID, Long> AUTO_BUSY_UNTIL = new ConcurrentHashMap<>();
     private static final List<PendingAutoPlacement> PENDING_AUTO_PLACEMENTS = new CopyOnWriteArrayList<>();
     private static final long CRAFT_REQUEST_COOLDOWN_TICKS = 40;
+    private static final long WATER_WARNING_COOLDOWN_TICKS = 20;
     private static final long AUTO_PLACE_TIMEOUT_TICKS = 20 * 60;
     private static final long AUTO_PLACE_POLL_INTERVAL_TICKS = 5;
 
@@ -106,6 +110,41 @@ public final class Ae2WandBridge {
                     Actionable.MODULATE);
             accounting.placed -= (int) Math.min(Integer.MAX_VALUE, extracted);
         }
+    }
+
+    public static boolean extractWaterForPlacement(Wand wand) {
+        if (wand == null || wand.creative || !(wand.player instanceof ServerPlayer player)) {
+            return true;
+        }
+
+        GridContext context = getGridContext(wand);
+        if (context == null) {
+            displayNoWater(player);
+            return false;
+        }
+
+        IActionSource source = new PlayerSource(player);
+        AEFluidKey water = AEFluidKey.of(Fluids.WATER);
+        long available = context.grid.getStorageService().getCachedInventory().get(water);
+        if (available >= AEFluidKey.AMOUNT_BLOCK) {
+            long extracted = StorageHelper.poweredExtraction(
+                    context.grid.getEnergyService(),
+                    context.grid.getStorageService().getInventory(),
+                    water,
+                    AEFluidKey.AMOUNT_BLOCK,
+                    source,
+                    Actionable.MODULATE);
+            if (extracted >= AEFluidKey.AMOUNT_BLOCK) {
+                return true;
+            }
+        }
+
+        if (extractWaterBucket(context, player, source)) {
+            return true;
+        }
+
+        displayNoWater(player);
+        return false;
     }
 
     public static void requestMissingCrafts(Wand wand) {
@@ -385,6 +424,51 @@ public final class Ae2WandBridge {
             return false;
         }
         LAST_CRAFT_REQUEST.put(requestKey, now);
+        return true;
+    }
+
+    private static void displayNoWater(ServerPlayer player) {
+        long now = player.level().getGameTime();
+        Long last = LAST_WATER_WARNING.get(player.getUUID());
+        if (last != null && now - last < WATER_WARNING_COOLDOWN_TICKS) {
+            return;
+        }
+
+        LAST_WATER_WARNING.put(player.getUUID(), now);
+        player.displayClientMessage(Component.literal("No water"), true);
+    }
+
+    private static boolean extractWaterBucket(GridContext context, ServerPlayer player, IActionSource source) {
+        AEItemKey waterBucket = AEItemKey.of(Items.WATER_BUCKET);
+        if (context.grid.getStorageService().getCachedInventory().get(waterBucket) < 1) {
+            return false;
+        }
+
+        long extracted = StorageHelper.poweredExtraction(
+                context.grid.getEnergyService(),
+                context.grid.getStorageService().getInventory(),
+                waterBucket,
+                1,
+                source,
+                Actionable.MODULATE);
+        if (extracted < 1) {
+            return false;
+        }
+
+        AEItemKey emptyBucket = AEItemKey.of(Items.BUCKET);
+        long inserted = StorageHelper.poweredInsert(
+                context.grid.getEnergyService(),
+                context.grid.getStorageService().getInventory(),
+                emptyBucket,
+                1,
+                source,
+                Actionable.MODULATE);
+        if (inserted < 1) {
+            ItemStack bucket = new ItemStack(Items.BUCKET);
+            if (!player.getInventory().add(bucket)) {
+                player.drop(bucket, false);
+            }
+        }
         return true;
     }
 

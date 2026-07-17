@@ -5,6 +5,7 @@ import java.util.Vector;
 import com.bossa.wandsae2.Ae2WandSettings;
 import com.bossa.wandsae2.network.SetAutoCraftModePacket;
 import com.bossa.wandsae2.network.SetCraftExcessPacket;
+import com.bossa.wandsae2.network.SetReplaceAirWaterPacket;
 
 import appeng.api.ids.AEComponents;
 import net.minecraft.client.Minecraft;
@@ -21,6 +22,7 @@ import net.nicguzzo.wands.client.gui.Tabs;
 import net.nicguzzo.wands.client.gui.Wdgt;
 import net.nicguzzo.wands.client.screens.WandScreen;
 import net.nicguzzo.wands.items.WandItem;
+import net.nicguzzo.wands.wand.WandProps;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -53,6 +55,9 @@ public abstract class WandScreenAe2TabMixin {
     private Section wandsae2$ae2Section;
 
     @Unique
+    private CycleToggle<Boolean> wandsae2$replaceAirWaterToggle;
+
+    @Unique
     private boolean wandsae2$ae2TabSelected;
 
     @Inject(method = "init", at = @At("TAIL"))
@@ -60,6 +65,8 @@ public abstract class WandScreenAe2TabMixin {
         if (wdgets == null || modeTabs == null || modeOptionsSection == null) {
             return;
         }
+
+        wandsae2$initReplaceAirWaterToggle();
 
         wandsae2$ae2Tabs = new Tabs();
         wandsae2$ae2Tabs.x = modeTabs.x;
@@ -139,6 +146,7 @@ public abstract class WandScreenAe2TabMixin {
 
     @Inject(method = "update_selections", at = @At("TAIL"))
     private void wandsae2$updateAe2TabSelection(CallbackInfo ci) {
+        wandsae2$updateReplaceAirWaterToggle();
         wandsae2$applyAe2TabSelection();
     }
 
@@ -154,6 +162,40 @@ public abstract class WandScreenAe2TabMixin {
     private void wandsae2$selectAe2Tab(boolean selected) {
         wandsae2$ae2TabSelected = selected;
         wandsae2$applyAe2TabSelection();
+    }
+
+    @Unique
+    private void wandsae2$initReplaceAirWaterToggle() {
+        wandsae2$replaceAirWaterToggle = CycleToggle.ofBoolean(
+                Component.literal("Replace Air"),
+                () -> Ae2WandSettings.isReplaceAirAndWater(wandsae2$getHeldWand()),
+                value -> {
+                    ItemStack stack = wandsae2$getHeldWand();
+                    Ae2WandSettings.setReplaceAirAndWater(stack, value);
+                    PacketDistributor.sendToServer(new SetReplaceAirWaterPacket(value));
+                },
+                "ON",
+                "OFF");
+        wandsae2$replaceAirWaterToggle.width = modeOptionsSection.width;
+        wandsae2$replaceAirWaterToggle.visible = false;
+        wandsae2$replaceAirWaterToggle.withTooltip(Component.literal("Replace Air"),
+                Component.literal("Paste copied air over solid blocks in Replace All mode."));
+        modeOptionsSection.add(wandsae2$replaceAirWaterToggle);
+        modeOptionsSection.recalculateBounds();
+    }
+
+    @Unique
+    private void wandsae2$updateReplaceAirWaterToggle() {
+        if (wandsae2$replaceAirWaterToggle == null) {
+            return;
+        }
+
+        ItemStack stack = wandsae2$getHeldWand();
+        boolean visible = wandsae2$isLinkedToAe2()
+                && WandProps.getMode(stack) == WandProps.Mode.PASTE
+                && WandProps.getAction(stack) == WandProps.Action.PLACE
+                && WandProps.getVal(stack, WandProps.Value.REPLACE_MODE) == 2;
+        wandsae2$replaceAirWaterToggle.visible = visible;
     }
 
     @Unique

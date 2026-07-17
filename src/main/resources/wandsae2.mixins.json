@@ -6,6 +6,7 @@
     "CraftConfirmMenuMixin",
     "InventoryManagerMixin",
     "NetworkingMixin",
+    "WandAccessor",
     "WandMixin",
     "WandItemMenuMixin"
   ],

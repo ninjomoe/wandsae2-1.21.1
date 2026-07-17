@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 
 import com.bossa.wandsae2.network.SetAutoCraftModePacket;
 import com.bossa.wandsae2.network.SetCraftExcessPacket;
+import com.bossa.wandsae2.network.SetReplaceAirWaterPacket;
 import com.mojang.logging.LogUtils;
 
 import appeng.api.features.GridLinkables;
@@ -43,7 +44,9 @@ public class BuildingWandsAe2Integration {
                 .playToServer(SetAutoCraftModePacket.TYPE, SetAutoCraftModePacket.STREAM_CODEC,
                         SetAutoCraftModePacket::handle)
                 .playToServer(SetCraftExcessPacket.TYPE, SetCraftExcessPacket.STREAM_CODEC,
-                        SetCraftExcessPacket::handle);
+                        SetCraftExcessPacket::handle)
+                .playToServer(SetReplaceAirWaterPacket.TYPE, SetReplaceAirWaterPacket.STREAM_CODEC,
+                        SetReplaceAirWaterPacket::handle);
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {

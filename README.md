@@ -18,6 +18,7 @@ This mod lets Building Wands behave more like AE2 wireless tools: link a wand to
 - Placed blocks are extracted from ME storage instead of requiring them in the player inventory.
 - Missing blocks can trigger AE2 autocrafting if the ME system has a crafting pattern for them.
 - AE2 crafting uses the linked ME network, including available stored ingredients and crafting CPUs.
+- Copy/paste can replace blocks with copied air and water while pasting in Replace All mode.
 
 ## AE2 Wand Menu
 
@@ -44,3 +45,14 @@ The number of extra blocks to craft when `Craft Excess` is `ON`.
 - Minimum: `1`
 - Maximum: `1000`
 - Saved per wand
+
+## Copy/Paste Air And Water
+
+Linked wands support extra schematic replacement behavior in paste mode.
+
+When the wand is in `Paste` mode, action is `Place`, and replace mode is `Replace All`, the paste options show a `Replace Air` toggle.
+
+- `OFF`: pasted air is ignored.
+- `ON`: copied air replaces existing blocks.
+
+Copied water is handled automatically in `Replace All` paste mode. In survival mode, each pasted source water block must be available from the linked ME system as stored water fluid or as a `Water Bucket`. Empty buckets are returned to the ME system when possible, otherwise to the player inventory. If no water is available, the action bar shows `No water`.
